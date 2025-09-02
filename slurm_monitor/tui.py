@@ -94,14 +94,17 @@ class SlurmCommands:
                         if gpu_match:
                             gpu_count = int(gpu_match.group(2))
                             
+                            # For job allocations, we need to handle per-node GPU count differently
+                            # The GPU count in squeue is total for the job, not per node
                             nodes = SlurmCommands.expand_nodelist(nodelist)
+                            gpu_per_node = gpu_count // len(nodes) if len(nodes) > 0 else gpu_count
                             for node in nodes:
                                 allocations[node]['users'].add(user)
                                 allocations[node]['jobs'].append({
                                     'user': user,
                                     'job': jobname,
                                     'jobid': jobid,
-                                    'gpus': gpu_count
+                                    'gpus': gpu_per_node
                                 })
             
             return allocations
@@ -112,7 +115,7 @@ class SlurmCommands:
     def get_queued_jobs():
         """Get queued jobs information"""
         try:
-            result = subprocess.run(['squeue', '-o', '%u|%T|%b|%j|%i|%Q|%S'], 
+            result = subprocess.run(['squeue', '-o', '%u|%T|%b|%j|%i|%Q|%S|%l'], 
                                    capture_output=True, text=True, timeout=10)
             
             if result.returncode != 0:
@@ -132,6 +135,7 @@ class SlurmCommands:
                     jobid = parts[4]
                     priority = parts[5] if len(parts) > 5 else 'N/A'
                     start_time = parts[6] if len(parts) > 6 else 'N/A'
+                    time_limit = parts[7] if len(parts) > 7 else '1:00:00'
                     
                     if state == 'PENDING' and 'gpu' in gres:
                         gpu_match = re.search(r'gpu:(\w+:)?(\d+)', gres)
@@ -139,12 +143,16 @@ class SlurmCommands:
                             gpu_type = gpu_match.group(1).rstrip(':') if gpu_match.group(1) else 'any'
                             gpu_count = int(gpu_match.group(2))
                             
+                            # Parse time limit to hours
+                            gpu_hours = SlurmCommands.parse_time_to_hours(time_limit) * gpu_count
+                            
                             queued_jobs.append({
                                 'user': user,
                                 'job': jobname,
                                 'jobid': jobid,
                                 'gpu_type': gpu_type,
                                 'gpu_count': gpu_count,
+                                'gpu_hours': gpu_hours,
                                 'priority': priority,
                                 'estimated_start': start_time
                             })
@@ -162,6 +170,33 @@ class SlurmCommands:
             return result.stdout.strip().split('\n')
         except:
             return [nodelist]
+    
+    @staticmethod
+    def parse_time_to_hours(time_str):
+        """Parse Slurm time format to hours"""
+        try:
+            # Handle various time formats: D-HH:MM:SS, HH:MM:SS, MM:SS
+            if '-' in time_str:
+                days, time = time_str.split('-')
+                days = int(days)
+            else:
+                days = 0
+                time = time_str
+            
+            parts = time.split(':')
+            if len(parts) == 3:
+                hours = int(parts[0])
+                minutes = int(parts[1])
+            elif len(parts) == 2:
+                hours = 0
+                minutes = int(parts[0])
+            else:
+                return 1.0  # Default to 1 hour
+            
+            total_hours = days * 24 + hours + minutes / 60
+            return total_hours if total_hours > 0 else 1.0
+        except:
+            return 1.0  # Default to 1 hour on parse error
 
 class OverviewWidget(Vertical):
     """Overview page widget"""
@@ -258,14 +293,16 @@ class OverviewWidget(Vertical):
         # Calculate user GPU usage
         user_gpu_summary = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'nodes': set()}))
         
-        for node_name, alloc_info in allocations.items():
-            # Find node info to get GPU type
-            node_info = next((n for n in nodes if n.get('name') == node_name), None)
-            if node_info and 'gpu_type' in node_info:
-                gpu_type = node_info['gpu_type']
-                for job in alloc_info['jobs']:
-                    user_gpu_summary[job['user']][gpu_type]['count'] += job['gpus']
-                    user_gpu_summary[job['user']][gpu_type]['nodes'].add(node_name)
+        # Debug: Check if allocations has data
+        if allocations:
+            for node_name, alloc_info in allocations.items():
+                # Find node info to get GPU type
+                node_info = next((n for n in nodes if n.get('name') == node_name), None)
+                if node_info and 'gpu_type' in node_info:
+                    gpu_type = node_info['gpu_type']
+                    for job in alloc_info.get('jobs', []):
+                        user_gpu_summary[job['user']][gpu_type]['count'] += job['gpus']
+                        user_gpu_summary[job['user']][gpu_type]['nodes'].add(node_name)
         
         # Sort users by total GPU usage
         user_totals = {user: sum(gpu_data['count'] for gpu_data in gpus.values()) 
@@ -287,7 +324,8 @@ class OverviewWidget(Vertical):
                 )
         
         if not user_gpu_summary:
-            users_table.add_row("No active users", "-", "-", "-")
+            # If no users found, show a message
+            users_table.add_row("No active GPU users", "-", "-", "-")
     
     def show_loading(self):
         """Show loading indicator"""
@@ -379,24 +417,28 @@ class QueueWidget(Vertical):
         summary_table.clear(columns=True)
         
         summary_table.add_column("GPU Type", width=15)
-        summary_table.add_column("Pending Jobs", width=15)
-        summary_table.add_column("GPUs Requested", width=15)
+        summary_table.add_column("Pending Jobs", width=12)
+        summary_table.add_column("GPUs Requested", width=12)
+        summary_table.add_column("GPU Hours", width=12)
         summary_table.add_column("Unique Users", width=12)
         
         # Aggregate data
-        gpu_type_summary = defaultdict(lambda: {'jobs': 0, 'gpus': 0, 'users': set()})
-        user_queue_summary = defaultdict(lambda: defaultdict(lambda: {'jobs': 0, 'gpus': 0}))
+        gpu_type_summary = defaultdict(lambda: {'jobs': 0, 'gpus': 0, 'gpu_hours': 0, 'users': set()})
+        user_queue_summary = defaultdict(lambda: defaultdict(lambda: {'jobs': 0, 'gpus': 0, 'gpu_hours': 0}))
         
         for job in queued_jobs:
             gpu_type = job['gpu_type']
             user = job['user']
+            gpu_hours = job.get('gpu_hours', job['gpu_count'])
             
             gpu_type_summary[gpu_type]['jobs'] += 1
             gpu_type_summary[gpu_type]['gpus'] += job['gpu_count']
+            gpu_type_summary[gpu_type]['gpu_hours'] += gpu_hours
             gpu_type_summary[gpu_type]['users'].add(user)
             
             user_queue_summary[user][gpu_type]['jobs'] += 1
             user_queue_summary[user][gpu_type]['gpus'] += job['gpu_count']
+            user_queue_summary[user][gpu_type]['gpu_hours'] += gpu_hours
         
         # Add summary rows
         if gpu_type_summary:
@@ -406,10 +448,11 @@ class QueueWidget(Vertical):
                     gpu_type,
                     f"⏳ {info['jobs']}",
                     str(info['gpus']),
+                    f"{info['gpu_hours']:.1f}",
                     str(len(info['users']))
                 )
         else:
-            summary_table.add_row("✅ No pending jobs", "-", "-", "-")
+            summary_table.add_row("✅ No pending jobs", "-", "-", "-", "-")
         
         # Users table
         users_table = self.query_one("#queue-users-table", DataTable)
@@ -417,13 +460,14 @@ class QueueWidget(Vertical):
         users_table.clear(columns=True)
         
         users_table.add_column("User", width=20)
-        users_table.add_column("GPU Type", width=15)
+        users_table.add_column("GPU Type", width=12)
         users_table.add_column("Pending Jobs", width=12)
-        users_table.add_column("GPUs Requested", width=15)
+        users_table.add_column("GPUs", width=8)
+        users_table.add_column("GPU Hours", width=12)
         
         if user_queue_summary:
-            # Sort users by total GPUs requested
-            user_totals = {user: sum(gpu['gpus'] for gpu in gpus.values()) 
+            # Sort users by total GPU hours requested
+            user_totals = {user: sum(gpu['gpu_hours'] for gpu in gpus.values()) 
                            for user, gpus in user_queue_summary.items()}
             
             for user in sorted(user_totals.keys(), key=lambda u: user_totals[u], reverse=True)[:10]:
@@ -433,10 +477,11 @@ class QueueWidget(Vertical):
                         user,
                         gpu_type,
                         f"⏳ {data['jobs']}",
-                        str(data['gpus'])
+                        str(data['gpus']),
+                        f"{data['gpu_hours']:.1f}"
                     )
         else:
-            users_table.add_row("No queued jobs", "-", "-", "-")
+            users_table.add_row("No queued jobs", "-", "-", "-", "-")
     
     def show_loading(self):
         """Show loading indicator"""
@@ -453,8 +498,11 @@ class SlurmMonitorApp(App):
     }
     
     DataTable {
-        height: auto;
+        height: 100%;
         margin: 1;
+        scrollbar-background: $panel;
+        scrollbar-color: $primary;
+        scrollbar-size: 1 1;
     }
     
     LoadingIndicator {
