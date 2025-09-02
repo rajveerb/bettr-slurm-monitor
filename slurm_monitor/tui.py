@@ -140,7 +140,7 @@ class SlurmCommands:
                     if state == 'PENDING' and 'gpu' in gres:
                         gpu_match = re.search(r'gpu:(\w+:)?(\d+)', gres)
                         if gpu_match:
-                            gpu_type = gpu_match.group(1).rstrip(':') if gpu_match.group(1) else 'any'
+                            gpu_type = gpu_match.group(1).rstrip(':') if gpu_match.group(1) else 'Any'
                             gpu_count = int(gpu_match.group(2))
                             
                             # Parse time limit to hours
@@ -212,10 +212,12 @@ class OverviewWidget(Vertical):
     
     def update_data(self, nodes: list, allocations: dict):
         """Update the overview display"""
-        # Hide loading, show table
+        # Hide loading, show tables
         self.query_one("#overview-loading").display = False
         table = self.query_one("#overview-table", DataTable)
         table.display = True
+        users_table = self.query_one("#overview-users-table", DataTable)
+        users_table.display = True
         
         # Clear and setup table
         table.clear(columns=True)
@@ -283,7 +285,6 @@ class OverviewWidget(Vertical):
             status.add_class("warning")
         
         # Add heavy users table
-        users_table = self.query_one("#overview-users-table", DataTable)
         users_table.clear(columns=True)
         users_table.add_column("User", width=20)
         users_table.add_column("GPU Type", width=12)
@@ -409,6 +410,7 @@ class QueueWidget(Vertical):
     
     def update_data(self, queued_jobs: list):
         """Update the queue display"""
+        # Hide loading, show both tables
         self.query_one("#queue-loading").display = False
         
         # Summary table
@@ -498,7 +500,8 @@ class SlurmMonitorApp(App):
     }
     
     DataTable {
-        height: 100%;
+        height: auto;
+        max-height: 100%;
         margin: 1;
         scrollbar-background: $panel;
         scrollbar-color: $primary;
