@@ -172,6 +172,8 @@ class OverviewWidget(Vertical):
             yield LoadingIndicator(id="overview-loading")
         yield DataTable(id="overview-table", show_cursor=False)
         yield Label("", id="overview-status", classes="status")
+        yield Label("🔥 Heavy Users (Current GPU Usage)", classes="subtitle")
+        yield DataTable(id="overview-users-table", show_cursor=False)
     
     def update_data(self, nodes: list, allocations: dict):
         """Update the overview display"""
@@ -244,11 +246,54 @@ class OverviewWidget(Vertical):
         else:
             status.update("❌ No GPUs Currently Available")
             status.add_class("warning")
+        
+        # Add heavy users table
+        users_table = self.query_one("#overview-users-table", DataTable)
+        users_table.clear(columns=True)
+        users_table.add_column("User", width=20)
+        users_table.add_column("GPU Type", width=12)
+        users_table.add_column("GPUs Used", width=10)
+        users_table.add_column("Nodes", width=30)
+        
+        # Calculate user GPU usage
+        user_gpu_summary = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'nodes': set()}))
+        
+        for node_name, alloc_info in allocations.items():
+            # Find node info to get GPU type
+            node_info = next((n for n in nodes if n.get('name') == node_name), None)
+            if node_info and 'gpu_type' in node_info:
+                gpu_type = node_info['gpu_type']
+                for job in alloc_info['jobs']:
+                    user_gpu_summary[job['user']][gpu_type]['count'] += job['gpus']
+                    user_gpu_summary[job['user']][gpu_type]['nodes'].add(node_name)
+        
+        # Sort users by total GPU usage
+        user_totals = {user: sum(gpu_data['count'] for gpu_data in gpus.values()) 
+                       for user, gpus in user_gpu_summary.items()}
+        
+        # Show top 5 heavy users
+        for user in sorted(user_totals.keys(), key=lambda u: user_totals[u], reverse=True)[:5]:
+            for gpu_type in sorted(user_gpu_summary[user].keys()):
+                gpu_data = user_gpu_summary[user][gpu_type]
+                nodes_str = ', '.join(sorted(list(gpu_data['nodes']))[:3])
+                if len(gpu_data['nodes']) > 3:
+                    nodes_str += f" (+{len(gpu_data['nodes'])-3} more)"
+                
+                users_table.add_row(
+                    user,
+                    gpu_type,
+                    str(gpu_data['count']),
+                    nodes_str
+                )
+        
+        if not user_gpu_summary:
+            users_table.add_row("No active users", "-", "-", "-")
     
     def show_loading(self):
         """Show loading indicator"""
         self.query_one("#overview-loading").display = True
         self.query_one("#overview-table").display = False
+        self.query_one("#overview-users-table").display = False
 
 class NodesWidget(Vertical):
     """Nodes page widget"""
@@ -319,9 +364,9 @@ class QueueWidget(Vertical):
         yield Label("📋 Job Queue", classes="title")
         with Center():
             yield LoadingIndicator(id="queue-loading")
-        yield Label("Queue by GPU Type:", classes="subtitle")
+        yield Label("⏳ PENDING Jobs - Queue by GPU Type:", classes="subtitle")
         yield DataTable(id="queue-summary-table", show_cursor=False)
-        yield Label("Queue by User (Top 10):", classes="subtitle")
+        yield Label("⏳ PENDING Jobs - Queue by User (Top 10):", classes="subtitle")
         yield DataTable(id="queue-users-table", show_cursor=False)
     
     def update_data(self, queued_jobs: list):
@@ -334,8 +379,8 @@ class QueueWidget(Vertical):
         summary_table.clear(columns=True)
         
         summary_table.add_column("GPU Type", width=15)
-        summary_table.add_column("Queued Jobs", width=12)
-        summary_table.add_column("Total GPUs", width=12)
+        summary_table.add_column("Pending Jobs", width=15)
+        summary_table.add_column("GPUs Requested", width=15)
         summary_table.add_column("Unique Users", width=12)
         
         # Aggregate data
@@ -359,12 +404,12 @@ class QueueWidget(Vertical):
                 info = gpu_type_summary[gpu_type]
                 summary_table.add_row(
                     gpu_type,
-                    str(info['jobs']),
+                    f"⏳ {info['jobs']}",
                     str(info['gpus']),
                     str(len(info['users']))
                 )
         else:
-            summary_table.add_row("No queued jobs", "-", "-", "-")
+            summary_table.add_row("✅ No pending jobs", "-", "-", "-")
         
         # Users table
         users_table = self.query_one("#queue-users-table", DataTable)
@@ -373,8 +418,8 @@ class QueueWidget(Vertical):
         
         users_table.add_column("User", width=20)
         users_table.add_column("GPU Type", width=15)
-        users_table.add_column("Jobs", width=8)
-        users_table.add_column("GPUs", width=8)
+        users_table.add_column("Pending Jobs", width=12)
+        users_table.add_column("GPUs Requested", width=15)
         
         if user_queue_summary:
             # Sort users by total GPUs requested
@@ -387,7 +432,7 @@ class QueueWidget(Vertical):
                     users_table.add_row(
                         user,
                         gpu_type,
-                        str(data['jobs']),
+                        f"⏳ {data['jobs']}",
                         str(data['gpus'])
                     )
         else:
@@ -456,6 +501,8 @@ class SlurmMonitorApp(App):
         Binding("1", "show_tab('overview')", "Overview"),
         Binding("2", "show_tab('nodes')", "Nodes"),
         Binding("3", "show_tab('queue')", "Queue"),
+        Binding("up,down", "", "Scroll ↑↓"),
+        Binding("pageup,pagedown", "", "Page ↑↓"),
     ]
     
     def __init__(self, db_path: Optional[str] = None, refresh_interval: int = 30):

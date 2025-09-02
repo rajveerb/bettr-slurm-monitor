@@ -12,11 +12,10 @@ A real-time, multi-page GPU cluster monitoring tool for Slurm with a terminal UI
 - 📊 **Real-time monitoring** - Live updates of GPU availability, usage, and queue status
 - 📈 **Time series logging** - SQLite database logging for historical analysis
 - 🚀 **Multi-page interface**:
-  - Overview: Quick availability and GPU summary
-  - Nodes: Detailed node information
-  - Users: User allocations and jobs
-  - Queue: Queued jobs aggregated by GPU type and user
-  - Summary: Detailed statistics
+  - Overview: Quick availability, GPU summary, and heavy users
+  - Nodes: Detailed node information with scrollable tables
+  - Queue: Pending jobs clearly marked with visual indicators
+  - (Legacy Rich version includes Users and Summary pages)
 - 🔔 **Discord notifications** - Optional webhook integration for status updates
 - 🎯 **Smart availability calculation** - Excludes drained/down nodes from availability
 
@@ -108,6 +107,16 @@ Options:
 
 ## Keyboard Shortcuts
 
+### TUI Version (Textual)
+| Key | Action |
+|-----|--------|
+| `1-3` | Switch between pages (Overview/Nodes/Queue) |
+| `↑/↓` | Scroll up/down in tables |
+| `PgUp/PgDn` | Page up/down in tables |
+| `r` | Force refresh |
+| `q` | Quit |
+
+### Classic Version (Rich)
 | Key | Action |
 |-----|--------|
 | `1-5` | Switch between pages |
@@ -119,6 +128,12 @@ Options:
 
 ## Pages
 
+### TUI Version (Textual)
+1. **Overview** - Quick GPU availability, summary statistics, and heavy users
+2. **Nodes** - Detailed node status with GPU allocation (scrollable)
+3. **Queue** - Pending jobs aggregated by GPU type and user with visual indicators
+
+### Classic Version (Rich)
 1. **Overview** - Quick GPU availability and summary statistics
 2. **Nodes** - Detailed node status with GPU allocation
 3. **Users** - User GPU usage and job information
