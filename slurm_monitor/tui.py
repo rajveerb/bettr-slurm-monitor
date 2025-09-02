@@ -12,28 +12,14 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
+from textual.containers import Container, Horizontal, Vertical, ScrollableContainer, Center
 from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Header, Footer, DataTable, Static, Label, Button, TabbedContent, TabPane
+from textual.widgets import Header, Footer, DataTable, Static, Label, Button, TabbedContent, TabPane, LoadingIndicator
 from textual.binding import Binding
-from textual import events
+from textual import events, work
 from rich.text import Text
 from rich.table import Table
-
-class GPUData:
-    """Container for GPU monitoring data"""
-    def __init__(self):
-        self.nodes = []
-        self.allocations = {}
-        self.queued_jobs = []
-        self.last_update = datetime.now()
-        
-    def update(self, nodes, allocations, queued_jobs):
-        self.nodes = nodes
-        self.allocations = allocations
-        self.queued_jobs = queued_jobs
-        self.last_update = datetime.now()
 
 class SlurmCommands:
     """Slurm command execution"""
@@ -44,6 +30,9 @@ class SlurmCommands:
         try:
             result = subprocess.run(['scontrol', 'show', 'node', '-d'], 
                                    capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                return []
             
             nodes = []
             current_node = {}
@@ -71,6 +60,8 @@ class SlurmCommands:
                 nodes.append(current_node)
             
             return nodes
+        except subprocess.TimeoutExpired:
+            return []
         except Exception as e:
             return []
     
@@ -80,6 +71,9 @@ class SlurmCommands:
         try:
             result = subprocess.run(['squeue', '-o', '%N|%u|%T|%b|%j|%i'], 
                                    capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                return {}
             
             allocations = defaultdict(lambda: {'users': set(), 'jobs': []})
             
@@ -120,6 +114,9 @@ class SlurmCommands:
         try:
             result = subprocess.run(['squeue', '-o', '%u|%T|%b|%j|%i|%Q|%S'], 
                                    capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                return []
             
             queued_jobs = []
             
@@ -166,25 +163,31 @@ class SlurmCommands:
         except:
             return [nodelist]
 
-class OverviewWidget(Static):
+class OverviewWidget(Vertical):
     """Overview page widget"""
     
     def compose(self) -> ComposeResult:
-        yield Label("📊 GPU Overview", id="overview-title")
-        yield DataTable(id="overview-table")
+        yield Label("📊 GPU Overview - Quick Availability", classes="title")
+        with Center():
+            yield LoadingIndicator(id="overview-loading")
+        yield DataTable(id="overview-table", show_cursor=False)
+        yield Label("", id="overview-status", classes="status")
     
-    def update_data(self, gpu_data: GPUData):
+    def update_data(self, nodes: list, allocations: dict):
         """Update the overview display"""
+        # Hide loading, show table
+        self.query_one("#overview-loading").display = False
         table = self.query_one("#overview-table", DataTable)
-        table.clear(columns=True)
+        table.display = True
         
-        # Add columns
-        table.add_column("GPU Type", key="type")
-        table.add_column("Total", key="total")
-        table.add_column("Used", key="used")
-        table.add_column("Available", key="available")
-        table.add_column("Usage %", key="usage")
-        table.add_column("Nodes", key="nodes")
+        # Clear and setup table
+        table.clear(columns=True)
+        table.add_column("GPU Type", width=12)
+        table.add_column("Total", width=8)
+        table.add_column("Used", width=8)
+        table.add_column("Available", width=12)
+        table.add_column("Usage %", width=10)
+        table.add_column("Healthy Nodes", width=15)
         
         # Calculate summary
         gpu_summary = defaultdict(lambda: {
@@ -192,7 +195,7 @@ class OverviewWidget(Static):
             'drain_nodes': 0, 'true_available': 0
         })
         
-        for node in gpu_data.nodes:
+        for node in nodes:
             if 'gpu_type' in node:
                 gpu_type = node['gpu_type']
                 total = node.get('gpu_total', 0)
@@ -210,86 +213,136 @@ class OverviewWidget(Static):
                     gpu_summary[gpu_type]['true_available'] += (total - used)
         
         # Add rows
+        total_available = 0
         for gpu_type in sorted(gpu_summary.keys()):
             info = gpu_summary[gpu_type]
             usage_pct = (info['used'] / info['total'] * 100) if info['total'] > 0 else 0
+            healthy = info['nodes'] - info['drain_nodes']
+            total_available += info['true_available']
+            
+            # Color code availability
+            avail_str = f"{info['true_available']}"
+            if info['true_available'] > 0:
+                avail_str = f"✅ {info['true_available']}"
+            else:
+                avail_str = f"❌ {info['true_available']}"
             
             table.add_row(
                 gpu_type,
                 str(info['total']),
                 str(info['used']),
-                str(info['true_available']),
+                avail_str,
                 f"{usage_pct:.1f}%",
-                f"{info['nodes'] - info['drain_nodes']}/{info['nodes']}"
+                f"{healthy}/{info['nodes']}"
             )
+        
+        # Update status
+        status = self.query_one("#overview-status", Label)
+        if total_available > 0:
+            status.update(f"✅ Total GPUs Available: {total_available}")
+            status.add_class("success")
+        else:
+            status.update("❌ No GPUs Currently Available")
+            status.add_class("warning")
+    
+    def show_loading(self):
+        """Show loading indicator"""
+        self.query_one("#overview-loading").display = True
+        self.query_one("#overview-table").display = False
 
-class NodesWidget(Static):
+class NodesWidget(Vertical):
     """Nodes page widget"""
     
     def compose(self) -> ComposeResult:
-        yield Label("🖥️ Node Details", id="nodes-title")
-        yield DataTable(id="nodes-table")
+        yield Label("🖥️ Node Details", classes="title")
+        with Center():
+            yield LoadingIndicator(id="nodes-loading")
+        yield DataTable(id="nodes-table", show_cursor=False)
     
-    def update_data(self, gpu_data: GPUData):
+    def update_data(self, nodes: list, allocations: dict):
         """Update the nodes display"""
+        self.query_one("#nodes-loading").display = False
         table = self.query_one("#nodes-table", DataTable)
+        table.display = True
+        
         table.clear(columns=True)
+        table.add_column("Node", width=20)
+        table.add_column("State", width=15)
+        table.add_column("GPU Type", width=10)
+        table.add_column("Total", width=8)
+        table.add_column("Used", width=8)
+        table.add_column("Available", width=10)
+        table.add_column("Users", width=30)
         
-        # Add columns
-        table.add_column("Node", key="node")
-        table.add_column("State", key="state")
-        table.add_column("GPU Type", key="gpu_type")
-        table.add_column("Total", key="total")
-        table.add_column("Used", key="used")
-        table.add_column("Available", key="available")
-        table.add_column("Users", key="users")
-        
-        # Add rows
-        for node in gpu_data.nodes:
+        for node in sorted(nodes, key=lambda x: x.get('name', '')):
             if 'gpu_type' in node:
                 total = node.get('gpu_total', 0)
                 used = node.get('gpu_used', 0)
                 available = total - used
                 state = node.get('state', '')
                 
-                users = ', '.join(sorted(gpu_data.allocations.get(node['name'], {}).get('users', [])))
+                # Color code state
+                if 'IDLE' in state:
+                    state_str = f"🟢 {state}"
+                elif 'ALLOCATED' in state or 'MIXED' in state:
+                    state_str = f"🟡 {state}"
+                elif 'DRAIN' in state:
+                    state_str = f"🔴 {state}"
+                elif 'DOWN' in state:
+                    state_str = f"⚫ {state}"
+                else:
+                    state_str = state
+                
+                users = ', '.join(sorted(allocations.get(node['name'], {}).get('users', [])))
                 if not users:
                     users = '-'
                 
                 table.add_row(
                     node['name'],
-                    state,
+                    state_str,
                     node['gpu_type'],
                     str(total),
                     str(used),
                     str(available),
                     users
                 )
+    
+    def show_loading(self):
+        """Show loading indicator"""
+        self.query_one("#nodes-loading").display = True
+        self.query_one("#nodes-table").display = False
 
-class QueueWidget(Static):
+class QueueWidget(Vertical):
     """Queue page widget"""
     
     def compose(self) -> ComposeResult:
-        yield Label("📋 Job Queue", id="queue-title")
-        yield DataTable(id="queue-summary-table")
-        yield DataTable(id="queue-users-table")
+        yield Label("📋 Job Queue", classes="title")
+        with Center():
+            yield LoadingIndicator(id="queue-loading")
+        yield Label("Queue by GPU Type:", classes="subtitle")
+        yield DataTable(id="queue-summary-table", show_cursor=False)
+        yield Label("Queue by User (Top 10):", classes="subtitle")
+        yield DataTable(id="queue-users-table", show_cursor=False)
     
-    def update_data(self, gpu_data: GPUData):
+    def update_data(self, queued_jobs: list):
         """Update the queue display"""
+        self.query_one("#queue-loading").display = False
+        
         # Summary table
         summary_table = self.query_one("#queue-summary-table", DataTable)
+        summary_table.display = True
         summary_table.clear(columns=True)
         
-        summary_table.add_column("GPU Type", key="type")
-        summary_table.add_column("Queued Jobs", key="jobs")
-        summary_table.add_column("Total GPUs", key="gpus")
-        summary_table.add_column("Unique Users", key="users")
+        summary_table.add_column("GPU Type", width=15)
+        summary_table.add_column("Queued Jobs", width=12)
+        summary_table.add_column("Total GPUs", width=12)
+        summary_table.add_column("Unique Users", width=12)
         
         # Aggregate data
         gpu_type_summary = defaultdict(lambda: {'jobs': 0, 'gpus': 0, 'users': set()})
         user_queue_summary = defaultdict(lambda: defaultdict(lambda: {'jobs': 0, 'gpus': 0}))
         
-        for job in gpu_data.queued_jobs:
+        for job in queued_jobs:
             gpu_type = job['gpu_type']
             user = job['user']
             
@@ -301,37 +354,50 @@ class QueueWidget(Static):
             user_queue_summary[user][gpu_type]['gpus'] += job['gpu_count']
         
         # Add summary rows
-        for gpu_type in sorted(gpu_type_summary.keys()):
-            info = gpu_type_summary[gpu_type]
-            summary_table.add_row(
-                gpu_type,
-                str(info['jobs']),
-                str(info['gpus']),
-                str(len(info['users']))
-            )
+        if gpu_type_summary:
+            for gpu_type in sorted(gpu_type_summary.keys()):
+                info = gpu_type_summary[gpu_type]
+                summary_table.add_row(
+                    gpu_type,
+                    str(info['jobs']),
+                    str(info['gpus']),
+                    str(len(info['users']))
+                )
+        else:
+            summary_table.add_row("No queued jobs", "-", "-", "-")
         
         # Users table
         users_table = self.query_one("#queue-users-table", DataTable)
+        users_table.display = True
         users_table.clear(columns=True)
         
-        users_table.add_column("User", key="user")
-        users_table.add_column("GPU Type", key="type")
-        users_table.add_column("Jobs", key="jobs")
-        users_table.add_column("GPUs", key="gpus")
+        users_table.add_column("User", width=20)
+        users_table.add_column("GPU Type", width=15)
+        users_table.add_column("Jobs", width=8)
+        users_table.add_column("GPUs", width=8)
         
-        # Sort users by total GPUs requested
-        user_totals = {user: sum(gpu['gpus'] for gpu in gpus.values()) 
-                       for user, gpus in user_queue_summary.items()}
-        
-        for user in sorted(user_totals.keys(), key=lambda u: user_totals[u], reverse=True)[:10]:
-            for gpu_type in sorted(user_queue_summary[user].keys()):
-                data = user_queue_summary[user][gpu_type]
-                users_table.add_row(
-                    user,
-                    gpu_type,
-                    str(data['jobs']),
-                    str(data['gpus'])
-                )
+        if user_queue_summary:
+            # Sort users by total GPUs requested
+            user_totals = {user: sum(gpu['gpus'] for gpu in gpus.values()) 
+                           for user, gpus in user_queue_summary.items()}
+            
+            for user in sorted(user_totals.keys(), key=lambda u: user_totals[u], reverse=True)[:10]:
+                for gpu_type in sorted(user_queue_summary[user].keys()):
+                    data = user_queue_summary[user][gpu_type]
+                    users_table.add_row(
+                        user,
+                        gpu_type,
+                        str(data['jobs']),
+                        str(data['gpus'])
+                    )
+        else:
+            users_table.add_row("No queued jobs", "-", "-", "-")
+    
+    def show_loading(self):
+        """Show loading indicator"""
+        self.query_one("#queue-loading").display = True
+        self.query_one("#queue-summary-table").display = False
+        self.query_one("#queue-users-table").display = False
 
 class SlurmMonitorApp(App):
     """Main TUI application"""
@@ -341,16 +407,42 @@ class SlurmMonitorApp(App):
         background: $surface;
     }
     
-    #overview-table, #nodes-table, #queue-summary-table, #queue-users-table {
-        height: 100%;
-        border: solid $primary;
+    DataTable {
+        height: auto;
+        margin: 1;
     }
     
-    Label {
+    LoadingIndicator {
+        height: 3;
+        margin: 2;
+    }
+    
+    .title {
         padding: 1;
         background: $primary;
         color: $text;
         text-style: bold;
+        text-align: center;
+    }
+    
+    .subtitle {
+        padding-top: 1;
+        text-style: bold;
+        color: $primary;
+    }
+    
+    .status {
+        padding: 1;
+        margin: 1;
+        text-align: center;
+    }
+    
+    .success {
+        color: $success;
+    }
+    
+    .warning {
+        color: $warning;
     }
     
     TabbedContent {
@@ -368,10 +460,12 @@ class SlurmMonitorApp(App):
     
     def __init__(self, db_path: Optional[str] = None, refresh_interval: int = 30):
         super().__init__()
-        self.gpu_data = GPUData()
         self.db_path = db_path
         self.db_conn = None
         self.refresh_interval = refresh_interval
+        self.nodes = []
+        self.allocations = {}
+        self.queued_jobs = []
         
         if self.db_path:
             self.setup_database()
@@ -382,7 +476,6 @@ class SlurmMonitorApp(App):
             self.db_conn = sqlite3.connect(self.db_path)
             cursor = self.db_conn.cursor()
             
-            # Create tables (same as before)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS gpu_availability (
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -424,28 +517,46 @@ class SlurmMonitorApp(App):
     
     async def on_mount(self) -> None:
         """Called when app starts"""
-        self.refresh_data()
-        self.set_interval(self.refresh_interval, self.refresh_data)
+        # Show loading initially
+        self.show_all_loading()
+        # Start background refresh
+        self.refresh_data_worker()
+        # Set up periodic refresh
+        self.set_interval(self.refresh_interval, self.refresh_data_worker)
     
-    def refresh_data(self) -> None:
-        """Refresh all data from Slurm"""
-        nodes = SlurmCommands.get_node_info()
-        allocations = SlurmCommands.get_job_allocations()
-        queued_jobs = SlurmCommands.get_queued_jobs()
-        
-        self.gpu_data.update(nodes, allocations, queued_jobs)
-        
-        # Update all widgets
+    def show_all_loading(self):
+        """Show loading indicators on all widgets"""
         for widget in self.query(OverviewWidget):
-            widget.update_data(self.gpu_data)
+            widget.show_loading()
         for widget in self.query(NodesWidget):
-            widget.update_data(self.gpu_data)
+            widget.show_loading()
         for widget in self.query(QueueWidget):
-            widget.update_data(self.gpu_data)
+            widget.show_loading()
+    
+    @work(thread=True)
+    def refresh_data_worker(self) -> None:
+        """Refresh all data from Slurm in background"""
+        # Fetch data
+        self.nodes = SlurmCommands.get_node_info()
+        self.allocations = SlurmCommands.get_job_allocations()
+        self.queued_jobs = SlurmCommands.get_queued_jobs()
+        
+        # Update UI in main thread
+        self.call_from_thread(self.update_ui)
         
         # Log to database if enabled
         if self.db_conn:
             self.log_to_database()
+    
+    def update_ui(self):
+        """Update all widgets with new data"""
+        # Update all widgets
+        for widget in self.query(OverviewWidget):
+            widget.update_data(self.nodes, self.allocations)
+        for widget in self.query(NodesWidget):
+            widget.update_data(self.nodes, self.allocations)
+        for widget in self.query(QueueWidget):
+            widget.update_data(self.queued_jobs)
     
     def log_to_database(self):
         """Log current state to database"""
@@ -460,7 +571,7 @@ class SlurmMonitorApp(App):
             'total': 0, 'used': 0, 'true_available': 0, 'nodes': 0, 'drain_nodes': 0
         })
         
-        for node in self.gpu_data.nodes:
+        for node in self.nodes:
             if 'gpu_type' in node:
                 gpu_type = node['gpu_type']
                 total = node.get('gpu_total', 0)
@@ -495,7 +606,8 @@ class SlurmMonitorApp(App):
     
     def action_refresh(self) -> None:
         """Handle refresh action"""
-        self.refresh_data()
+        self.show_all_loading()
+        self.refresh_data_worker()
     
     def action_show_tab(self, tab: str) -> None:
         """Switch to a specific tab"""
