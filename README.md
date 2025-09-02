@@ -44,7 +44,22 @@ pip install -e .
 
 ## Usage
 
-### Basic Usage
+### TUI Version (Recommended) - New!
+
+The TUI version provides a more robust interface using Textual:
+
+```bash
+# Start the TUI version
+slurm-monitor-tui
+
+# With database logging
+slurm-monitor-tui --db
+
+# With custom refresh interval
+slurm-monitor-tui --interval 60
+```
+
+### Classic Version (Rich-based)
 
 ```bash
 # Start in live mode (default)
