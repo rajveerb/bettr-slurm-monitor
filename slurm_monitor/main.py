@@ -8,6 +8,8 @@ import subprocess
 import re
 import sqlite3
 import asyncio
+import requests
+import os
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -205,10 +207,11 @@ class OverviewWidget(Vertical):
         yield Label("📊 GPU Overview - Quick Availability", classes="title")
         with Center():
             yield LoadingIndicator(id="overview-loading")
-        yield DataTable(id="overview-table", show_cursor=False)
-        yield Label("", id="overview-status", classes="status")
-        yield Label("🔥 Heavy Users (Current GPU Usage)", classes="subtitle")
-        yield DataTable(id="overview-users-table", show_cursor=False)
+        with ScrollableContainer(id="overview-scroll"):
+            yield DataTable(id="overview-table", show_cursor=False)
+            yield Label("", id="overview-status", classes="status")
+            yield Label("🔥 Heavy Users (Current GPU Usage)", classes="subtitle")
+            yield DataTable(id="overview-users-table", show_cursor=False)
     
     def update_data(self, nodes: list, allocations: dict):
         """Update the overview display"""
@@ -341,7 +344,8 @@ class NodesWidget(Vertical):
         yield Label("🖥️ Node Details", classes="title")
         with Center():
             yield LoadingIndicator(id="nodes-loading")
-        yield DataTable(id="nodes-table", show_cursor=False)
+        with ScrollableContainer(id="nodes-scroll"):
+            yield DataTable(id="nodes-table", show_cursor=False)
     
     def update_data(self, nodes: list, allocations: dict):
         """Update the nodes display"""
@@ -403,10 +407,11 @@ class QueueWidget(Vertical):
         yield Label("📋 Job Queue", classes="title")
         with Center():
             yield LoadingIndicator(id="queue-loading")
-        yield Label("⏳ PENDING Jobs - Queue by GPU Type:", classes="subtitle")
-        yield DataTable(id="queue-summary-table", show_cursor=False)
-        yield Label("⏳ PENDING Jobs - Queue by User (Top 10):", classes="subtitle")
-        yield DataTable(id="queue-users-table", show_cursor=False)
+        with ScrollableContainer(id="queue-scroll"):
+            yield Label("⏳ PENDING Jobs - Queue by GPU Type:", classes="subtitle")
+            yield DataTable(id="queue-summary-table", show_cursor=False)
+            yield Label("⏳ PENDING Jobs - Queue by User (Top 10):", classes="subtitle")
+            yield DataTable(id="queue-users-table", show_cursor=False)
     
     def update_data(self, queued_jobs: list):
         """Update the queue display"""
@@ -499,13 +504,13 @@ class SlurmMonitorApp(App):
         background: $surface;
     }
     
+    ScrollableContainer {
+        height: 100%;
+    }
+    
     DataTable {
         height: auto;
-        max-height: 100%;
         margin: 1;
-        scrollbar-background: $panel;
-        scrollbar-color: $primary;
-        scrollbar-size: 1 1;
     }
     
     LoadingIndicator {
@@ -556,14 +561,18 @@ class SlurmMonitorApp(App):
         Binding("pageup,pagedown", "", "Page ↑↓"),
     ]
     
-    def __init__(self, db_path: Optional[str] = None, refresh_interval: int = 30):
+    def __init__(self, db_path: Optional[str] = None, refresh_interval: int = 30, 
+                 webhook_url: Optional[str] = None):
         super().__init__()
         self.db_path = db_path
         self.db_conn = None
         self.refresh_interval = refresh_interval
+        self.webhook_url = webhook_url
         self.nodes = []
         self.allocations = {}
         self.queued_jobs = []
+        self.last_discord_notify = None
+        self.discord_interval = 1800  # 30 minutes default
         
         if self.db_path:
             self.setup_database()
@@ -645,6 +654,10 @@ class SlurmMonitorApp(App):
         # Log to database if enabled
         if self.db_conn:
             self.log_to_database()
+        
+        # Send Discord notification if enabled
+        if self.webhook_url:
+            self.send_discord_notification()
     
     def update_ui(self):
         """Update all widgets with new data"""
@@ -700,7 +713,132 @@ class SlurmMonitorApp(App):
                 info['nodes'] - info['drain_nodes']
             ))
         
+        # Log user usage
+        user_gpu_summary = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'jobs': 0}))
+        
+        for node_name, alloc_info in self.allocations.items():
+            # Find node info to get GPU type
+            node_info = next((n for n in self.nodes if n.get('name') == node_name), None)
+            if node_info and 'gpu_type' in node_info:
+                gpu_type = node_info['gpu_type']
+                for job in alloc_info.get('jobs', []):
+                    user_gpu_summary[job['user']][gpu_type]['count'] += job['gpus']
+                    user_gpu_summary[job['user']][gpu_type]['jobs'] += 1
+        
+        for user, gpu_data in user_gpu_summary.items():
+            for gpu_type, counts in gpu_data.items():
+                cursor.execute('''
+                    INSERT INTO user_usage
+                    (timestamp, user, gpu_type, gpu_count, job_count)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (timestamp, user, gpu_type, counts['count'], counts['jobs']))
+        
+        # Log queue status
+        queue_summary = defaultdict(lambda: {'jobs': 0, 'gpus': 0, 'users': set()})
+        
+        for job in self.queued_jobs:
+            gpu_type = job['gpu_type']
+            queue_summary[gpu_type]['jobs'] += 1
+            queue_summary[gpu_type]['gpus'] += job['gpu_count']
+            queue_summary[gpu_type]['users'].add(job['user'])
+        
+        for gpu_type, info in queue_summary.items():
+            cursor.execute('''
+                INSERT INTO queue_status
+                (timestamp, gpu_type, queued_jobs, queued_gpus, unique_users)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (timestamp, gpu_type, info['jobs'], info['gpus'], len(info['users'])))
+        
+        # Log node status
+        for node in self.nodes:
+            if 'gpu_type' in node:
+                cursor.execute('''
+                    INSERT INTO node_status
+                    (timestamp, node_name, state, gpu_type, total_gpus, used_gpus)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    timestamp,
+                    node.get('name', 'unknown'),
+                    node.get('state', 'unknown'),
+                    node['gpu_type'],
+                    node.get('gpu_total', 0),
+                    node.get('gpu_used', 0)
+                ))
+        
         self.db_conn.commit()
+    
+    def send_discord_notification(self):
+        """Send status update to Discord webhook"""
+        if not self.webhook_url:
+            return
+        
+        # Check if enough time has passed since last notification
+        now = datetime.now()
+        if self.last_discord_notify:
+            time_diff = (now - self.last_discord_notify).total_seconds()
+            if time_diff < self.discord_interval:
+                return
+        
+        self.last_discord_notify = now
+        
+        # Calculate GPU summary
+        gpu_summary = defaultdict(lambda: {'total': 0, 'used': 0, 'available': 0})
+        
+        for node in self.nodes:
+            if 'gpu_type' in node:
+                gpu_type = node['gpu_type']
+                total = node.get('gpu_total', 0)
+                used = node.get('gpu_used', 0)
+                state = node.get('state', '')
+                
+                gpu_summary[gpu_type]['total'] += total
+                gpu_summary[gpu_type]['used'] += used
+                
+                is_healthy = 'DRAIN' not in state and 'DOWN' not in state
+                if is_healthy:
+                    gpu_summary[gpu_type]['available'] += (total - used)
+        
+        # Build Discord embed
+        embed = {
+            "title": "🖥️ GPU Cluster Status Update",
+            "color": 3447003,
+            "timestamp": now.isoformat(),
+            "fields": []
+        }
+        
+        # Add GPU availability fields
+        for gpu_type in sorted(gpu_summary.keys()):
+            info = gpu_summary[gpu_type]
+            usage_pct = (info['used'] / info['total'] * 100) if info['total'] > 0 else 0
+            
+            field = {
+                "name": f"{gpu_type} GPUs",
+                "value": f"Available: {info['available']}/{info['total']} ({usage_pct:.1f}% used)",
+                "inline": True
+            }
+            embed["fields"].append(field)
+        
+        # Add queue summary
+        total_queued = len(self.queued_jobs)
+        if total_queued > 0:
+            queue_gpus = sum(job['gpu_count'] for job in self.queued_jobs)
+            embed["fields"].append({
+                "name": "📋 Queue Status",
+                "value": f"{total_queued} jobs waiting for {queue_gpus} GPUs",
+                "inline": False
+            })
+        
+        # Send webhook
+        try:
+            response = requests.post(
+                self.webhook_url,
+                json={"embeds": [embed]},
+                timeout=10
+            )
+            response.raise_for_status()
+        except Exception as e:
+            # Silently fail - don't interrupt monitoring
+            pass
     
     def action_refresh(self) -> None:
         """Handle refresh action"""
@@ -720,12 +858,17 @@ def main():
     parser.add_argument('--db', action='store_true', help='Enable SQLite logging')
     parser.add_argument('--db-path', type=str, default='gpu_monitor.db', help='Database path')
     parser.add_argument('--interval', type=int, default=30, help='Refresh interval in seconds')
+    parser.add_argument('--webhook', type=str, help='Discord webhook URL for notifications')
     
     args = parser.parse_args()
     
+    # Check environment variable for webhook if not provided as argument
+    webhook_url = args.webhook or os.environ.get('DISCORD_WEBHOOK_URL')
+    
     app = SlurmMonitorApp(
         db_path=args.db_path if args.db else None,
-        refresh_interval=args.interval
+        refresh_interval=args.interval,
+        webhook_url=webhook_url
     )
     app.run()
 

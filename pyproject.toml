@@ -40,7 +40,7 @@ Repository = "https://github.com/AgrawalAmey/slurm-monitor"
 Issues = "https://github.com/AgrawalAmey/slurm-monitor/issues"
 
 [project.scripts]
-slurm-monitor = "slurm_monitor:main"
+slurm-monitor = "slurm_monitor.main:main"
 
 [project.optional-dependencies]
 dev = [
