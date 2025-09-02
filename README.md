@@ -158,10 +158,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## Author
-
-Amey Agrawal
-
 ## Acknowledgments
 
 - Built with [Textual](https://github.com/Textualize/textual) for modern terminal UI
