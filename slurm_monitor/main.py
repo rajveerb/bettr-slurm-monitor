@@ -207,11 +207,10 @@ class OverviewWidget(Vertical):
         yield Label("📊 GPU Overview - Quick Availability", classes="title")
         with Center():
             yield LoadingIndicator(id="overview-loading")
-        with ScrollableContainer(id="overview-scroll"):
-            yield DataTable(id="overview-table", show_cursor=False)
-            yield Label("", id="overview-status", classes="status")
-            yield Label("🔥 Heavy Users (Current GPU Usage)", classes="subtitle")
-            yield DataTable(id="overview-users-table", show_cursor=False)
+        yield DataTable(id="overview-table", show_cursor=False)
+        yield Label("", id="overview-status", classes="status")
+        yield Label("🔥 Heavy Users (Current GPU Usage)", classes="subtitle")
+        yield DataTable(id="overview-users-table", show_cursor=False)
     
     def update_data(self, nodes: list, allocations: dict):
         """Update the overview display"""
@@ -344,8 +343,7 @@ class NodesWidget(Vertical):
         yield Label("🖥️ Node Details", classes="title")
         with Center():
             yield LoadingIndicator(id="nodes-loading")
-        with ScrollableContainer(id="nodes-scroll"):
-            yield DataTable(id="nodes-table", show_cursor=False)
+        yield DataTable(id="nodes-table", show_cursor=False)
     
     def update_data(self, nodes: list, allocations: dict):
         """Update the nodes display"""
@@ -407,11 +405,10 @@ class QueueWidget(Vertical):
         yield Label("📋 Job Queue", classes="title")
         with Center():
             yield LoadingIndicator(id="queue-loading")
-        with ScrollableContainer(id="queue-scroll"):
-            yield Label("⏳ PENDING Jobs - Queue by GPU Type:", classes="subtitle")
-            yield DataTable(id="queue-summary-table", show_cursor=False)
-            yield Label("⏳ PENDING Jobs - Queue by User (Top 10):", classes="subtitle")
-            yield DataTable(id="queue-users-table", show_cursor=False)
+        yield Label("⏳ PENDING Jobs - Queue by GPU Type:", classes="subtitle")
+        yield DataTable(id="queue-summary-table", show_cursor=False)
+        yield Label("⏳ PENDING Jobs - Queue by User (Top 10):", classes="subtitle")
+        yield DataTable(id="queue-users-table", show_cursor=False)
     
     def update_data(self, queued_jobs: list):
         """Update the queue display"""
@@ -504,12 +501,9 @@ class SlurmMonitorApp(App):
         background: $surface;
     }
     
-    ScrollableContainer {
-        height: 100%;
-    }
-    
     DataTable {
         height: auto;
+        max-height: 20;
         margin: 1;
     }
     
