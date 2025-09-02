@@ -11,7 +11,7 @@ import queue
 import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
-from rich.console import Console
+from rich.console import Console, Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.layout import Layout
@@ -879,7 +879,7 @@ def main():
         keyboard.start()
         
         try:
-            with Live(console=console, refresh_per_second=2, screen=True) as live:
+            with Live(console=console, refresh_per_second=2, screen=False, auto_refresh=True) as live:
                 while True:
                     # Check for keyboard input
                     key = keyboard.get_key()
@@ -997,7 +997,9 @@ def main():
                     if show_help:
                         display = create_help_page()
                     else:
-                        layout = Layout()
+                        # Use Group instead of Layout for simpler rendering
+                        from rich.console import Group
+                        
                         header = create_header(current_page, 5, last_update)
                         
                         if current_page == 0:
@@ -1011,11 +1013,7 @@ def main():
                         else:
                             content = create_summary_page(nodes)
                         
-                        layout.split_column(
-                            Layout(header, size=5),
-                            Layout(content)
-                        )
-                        display = layout
+                        display = Group(header, content)
                     
                     live.update(display)
                     time.sleep(0.1)  # Small delay for responsiveness
