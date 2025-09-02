@@ -1,113 +1,59 @@
 # Slurm GPU Monitor
 
-A real-time, multi-page GPU cluster monitoring tool for Slurm with a terminal UI similar to htop. Features include live updates, SQLite logging for time series data, queue monitoring, and Discord notifications.
+A comprehensive, real-time GPU cluster monitoring tool for Slurm-managed HPC environments with an interactive terminal UI.
 
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-[![PyPI](https://img.shields.io/pypi/v/slurm-monitor.svg)](https://pypi.org/project/slurm-monitor/)
 
 ## Features
 
-- 🖥️ **Full-screen terminal UI** - Similar to htop, with multiple pages and keyboard navigation
+- 🖥️ **Interactive Terminal UI** - Full-screen interface built with Textual framework
 - 📊 **Real-time monitoring** - Live updates of GPU availability, usage, and queue status
 - 📈 **Time series logging** - SQLite database logging for historical analysis
 - 🚀 **Multi-page interface**:
   - Overview: Quick availability, GPU summary, and heavy users
   - Nodes: Detailed node information with scrollable tables
-  - Queue: Pending jobs clearly marked with visual indicators
-  - (Legacy Rich version includes Users and Summary pages)
+  - Queue: Pending jobs with GPU hours calculation
 - 🔔 **Discord notifications** - Optional webhook integration for status updates
 - 🎯 **Smart availability calculation** - Excludes drained/down nodes from availability
 
 ## Installation
 
-### Using pip
+### Via pip/uv
 
 ```bash
-pip install slurm-monitor
+# Using pip
+pip install git+https://github.com/AgrawalAmey/slurm-monitor.git
+
+# Using uv
+uv pip install git+https://github.com/AgrawalAmey/slurm-monitor.git
 ```
 
-### Using uv
+### Development Installation
 
 ```bash
-uv pip install slurm-monitor
-```
-
-### From source
-
-```bash
-git clone https://github.com/AgrawalAmey/slurm-monitor.git
+git clone git@github.com:AgrawalAmey/slurm-monitor.git
 cd slurm-monitor
 pip install -e .
 ```
 
 ## Usage
 
-### TUI Version (Recommended) - New!
-
-The TUI version provides a more robust interface using Textual:
-
 ```bash
-# Start the TUI version
-slurm-monitor-tui
-
-# With database logging
-slurm-monitor-tui --db
-
-# With custom refresh interval
-slurm-monitor-tui --interval 60
+slurm-monitor [options]
 ```
 
-### Classic Version (Rich-based)
+### Options
 
-```bash
-# Start in live mode (default)
-slurm-monitor
-
-# Single run mode
-slurm-monitor --no-live
-
-# With custom refresh interval (seconds)
-slurm-monitor --interval 60
 ```
-
-### SQLite Logging
-
-```bash
-# Enable database logging
-slurm-monitor --db
-
-# Custom database path
-slurm-monitor --db --db-path /path/to/metrics.db
-```
-
-### Discord Notifications
-
-```bash
-# Set webhook URL
-export DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'
-
-# Run with Discord notifications
-slurm-monitor --discord --discord-interval 1800
-```
-
-### All Options
-
-```bash
-slurm-monitor --help
-
-Options:
-  --no-live              Disable live monitoring mode (single run)
-  --interval SECONDS     Refresh interval in seconds (default: 30)
-  --discord              Enable Discord notifications
-  --discord-interval SEC Discord notification interval (default: 1800)
+  --refresh SECONDS      Update interval in seconds (default: 30)
+  --webhook URL          Discord webhook URL for notifications
   --db                   Enable SQLite logging for time series data
   --db-path PATH         Path to SQLite database (default: gpu_monitor.db)
 ```
 
 ## Keyboard Shortcuts
 
-### TUI Version (Textual)
 | Key | Action |
 |-----|--------|
 | `1-3` | Switch between pages (Overview/Nodes/Queue) |
@@ -116,29 +62,11 @@ Options:
 | `r` | Force refresh |
 | `q` | Quit |
 
-### Classic Version (Rich)
-| Key | Action |
-|-----|--------|
-| `1-5` | Switch between pages |
-| `Tab` | Next page |
-| `←/→` | Previous/Next page |
-| `r` | Force refresh |
-| `h`, `?` | Show help |
-| `q` | Quit |
-
 ## Pages
 
-### TUI Version (Textual)
-1. **Overview** - Quick GPU availability, summary statistics, and heavy users
+1. **Overview** - GPU availability, summary statistics, and top heavy users
 2. **Nodes** - Detailed node status with GPU allocation (scrollable)
-3. **Queue** - Pending jobs aggregated by GPU type and user with visual indicators
-
-### Classic Version (Rich)
-1. **Overview** - Quick GPU availability and summary statistics
-2. **Nodes** - Detailed node status with GPU allocation
-3. **Users** - User GPU usage and job information
-4. **Queue** - Queued jobs aggregated by GPU type and user
-5. **Summary** - Detailed statistics with legend
+3. **Queue** - Pending jobs with GPU hours calculation, sorted by resource usage
 
 ## Database Schema
 
@@ -147,7 +75,7 @@ When using `--db`, the tool creates an SQLite database with four tables:
 ### gpu_availability
 - `timestamp`: Time of measurement
 - `gpu_type`: GPU model (a100, h100, etc.)
-- `total`, `used`, `available`, `true_available`: GPU counts
+- `total`, `used`, `available`: GPU counts
 - `nodes_total`, `nodes_healthy`: Node counts
 
 ### user_usage
@@ -202,6 +130,7 @@ ORDER BY date DESC;
 - Python 3.8+
 - Slurm commands: `squeue`, `scontrol`
 - Terminal with alternate screen buffer support
+- Textual framework for TUI
 
 ## Development
 
@@ -235,5 +164,5 @@ Amey Agrawal
 
 ## Acknowledgments
 
-- Built with [Rich](https://github.com/Textualize/rich) for beautiful terminal UI
+- Built with [Textual](https://github.com/Textualize/textual) for modern terminal UI
 - Inspired by htop's interface design
