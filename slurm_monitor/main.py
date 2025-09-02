@@ -559,7 +559,6 @@ class SlurmMonitorApp(App):
                  webhook_url: Optional[str] = None):
         super().__init__()
         self.db_path = db_path
-        self.db_conn = None
         self.refresh_interval = refresh_interval
         self.webhook_url = webhook_url
         self.nodes = []
@@ -568,14 +567,15 @@ class SlurmMonitorApp(App):
         self.last_discord_notify = None
         self.discord_interval = 1800  # 30 minutes default
         
+        # Don't create DB connection in main thread if using threads
         if self.db_path:
-            self.setup_database()
+            self.setup_database_schema()
     
-    def setup_database(self):
-        """Setup SQLite database for logging"""
+    def setup_database_schema(self):
+        """Setup SQLite database schema (creates tables if needed)"""
         if self.db_path:
-            self.db_conn = sqlite3.connect(self.db_path)
-            cursor = self.db_conn.cursor()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS gpu_availability (
@@ -600,7 +600,8 @@ class SlurmMonitorApp(App):
                 )
             ''')
             
-            self.db_conn.commit()
+            conn.commit()
+            conn.close()
     
     def compose(self) -> ComposeResult:
         """Create child widgets"""
@@ -646,7 +647,7 @@ class SlurmMonitorApp(App):
         self.call_from_thread(self.update_ui)
         
         # Log to database if enabled
-        if self.db_conn:
+        if self.db_path:
             self.log_to_database()
         
         # Send Discord notification if enabled
@@ -665,10 +666,12 @@ class SlurmMonitorApp(App):
     
     def log_to_database(self):
         """Log current state to database"""
-        if not self.db_conn:
+        if not self.db_path:
             return
         
-        cursor = self.db_conn.cursor()
+        # Create connection in worker thread
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
         timestamp = datetime.now()
         
         # Calculate and log GPU availability
@@ -759,7 +762,8 @@ class SlurmMonitorApp(App):
                     node.get('gpu_used', 0)
                 ))
         
-        self.db_conn.commit()
+        conn.commit()
+        conn.close()
     
     def send_discord_notification(self):
         """Send status update to Discord webhook"""
