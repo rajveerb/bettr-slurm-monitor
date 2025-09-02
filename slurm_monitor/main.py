@@ -353,31 +353,6 @@ Last Update: {last_update.strftime('%H:%M:%S')}"""
 
 def create_overview_page(nodes, allocations):
     """Create the overview page with quick availability and summary"""
-    layout = Layout()
-    
-    # Quick availability panel
-    gpu_avail = defaultdict(int)
-    for node in nodes:
-        if 'gpu_type' in node:
-            state = node.get('state', '')
-            if 'DRAIN' not in state and 'DOWN' not in state:
-                total = node.get('gpu_total', 0)
-                used = node.get('gpu_used', 0)
-                available = total - used
-                if available > 0:
-                    gpu_avail[node['gpu_type']] += available
-    
-    if not gpu_avail:
-        avail_content = "[red]No GPUs currently available[/red]"
-    else:
-        lines = []
-        for gpu_type in sorted(gpu_avail.keys()):
-            count = gpu_avail[gpu_type]
-            lines.append(f"[green]✓[/green] {gpu_type}: [bold green]{count}[/bold green] available")
-        avail_content = "\n".join(lines)
-    
-    quick_panel = Panel(avail_content, title="🚀 Quick Availability", box=box.ROUNDED)
-    
     # GPU Summary
     gpu_summary = defaultdict(lambda: {
         'total': 0, 'used': 0, 'nodes': 0, 
@@ -401,16 +376,19 @@ def create_overview_page(nodes, allocations):
             else:
                 gpu_summary[gpu_type]['true_available'] += (total - used)
     
-    summary_table = Table(title="📊 GPU Summary", box=box.ROUNDED)
-    summary_table.add_column("Type", style="cyan")
-    summary_table.add_column("Total", justify="right")
+    summary_table = Table(title="📊 GPU Overview - Quick Availability", box=box.ROUNDED)
+    summary_table.add_column("GPU Type", style="cyan", no_wrap=True)
+    summary_table.add_column("Total", justify="right", style="white")
     summary_table.add_column("Used", justify="right", style="red")
-    summary_table.add_column("Available", justify="right", style="green")
+    summary_table.add_column("Available", justify="right", style="bold green")
     summary_table.add_column("Usage %", justify="right")
+    summary_table.add_column("Nodes", justify="right", style="white")
+    summary_table.add_column("Healthy", justify="right", style="green")
     
     for gpu_type in sorted(gpu_summary.keys()):
         info = gpu_summary[gpu_type]
         usage_pct = (info['used'] / info['total'] * 100) if info['total'] > 0 else 0
+        healthy_nodes = info['nodes'] - info['drain_nodes']
         
         if usage_pct >= 90:
             usage_str = f"[bold red]{usage_pct:.1f}%[/bold red]"
@@ -419,20 +397,43 @@ def create_overview_page(nodes, allocations):
         else:
             usage_str = f"[green]{usage_pct:.1f}%[/green]"
         
+        # Highlight available GPUs
+        avail_str = str(info['true_available'])
+        if info['true_available'] > 0:
+            avail_str = f"[bold green]{info['true_available']}[/bold green] ✓"
+        else:
+            avail_str = f"[red]{info['true_available']}[/red]"
+        
         summary_table.add_row(
             gpu_type,
             str(info['total']),
             str(info['used']),
-            str(info['true_available']),
-            usage_str
+            avail_str,
+            usage_str,
+            str(info['nodes']),
+            f"{healthy_nodes}/{info['nodes']}"
         )
     
-    layout.split_column(
-        Layout(quick_panel, size=8),
-        Layout(summary_table)
+    # Add totals row
+    total_gpus = sum(s['total'] for s in gpu_summary.values())
+    total_used = sum(s['used'] for s in gpu_summary.values())
+    total_available = sum(s['true_available'] for s in gpu_summary.values())
+    total_usage = (total_used / total_gpus * 100) if total_gpus > 0 else 0
+    total_nodes = sum(s['nodes'] for s in gpu_summary.values())
+    total_healthy = sum(s['nodes'] - s['drain_nodes'] for s in gpu_summary.values())
+    
+    summary_table.add_section()
+    summary_table.add_row(
+        "[bold]TOTAL[/bold]",
+        f"[bold]{total_gpus}[/bold]",
+        f"[bold]{total_used}[/bold]",
+        f"[bold green]{total_available}[/bold green]" if total_available > 0 else f"[red]{total_available}[/red]",
+        f"[bold]{total_usage:.1f}%[/bold]",
+        f"[bold]{total_nodes}[/bold]",
+        f"[bold]{total_healthy}/{total_nodes}[/bold]"
     )
     
-    return layout
+    return Align.center(summary_table, vertical="top")
 
 def create_nodes_page(nodes, allocations):
     """Create the nodes detail page"""
@@ -1011,7 +1012,7 @@ def main():
                             content = create_summary_page(nodes)
                         
                         layout.split_column(
-                            Layout(header, size=6),
+                            Layout(header, size=5),
                             Layout(content)
                         )
                         display = layout
