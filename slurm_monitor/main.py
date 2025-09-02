@@ -600,6 +600,27 @@ class SlurmMonitorApp(App):
                 )
             ''')
             
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_usage (
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    user TEXT,
+                    gpu_type TEXT,
+                    gpu_count INTEGER,
+                    job_count INTEGER
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS node_status (
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    node_name TEXT,
+                    state TEXT,
+                    gpu_type TEXT,
+                    total_gpus INTEGER,
+                    used_gpus INTEGER
+                )
+            ''')
+            
             conn.commit()
             conn.close()
     
