@@ -61,6 +61,7 @@ This is a real-time GPU cluster monitoring tool for Slurm-managed HPC environmen
 2. Data is processed and aggregated in worker threads to avoid blocking UI
 3. UI updates happen via `call_from_thread()` to ensure thread safety
 4. Optional SQLite logging and Discord notifications run in background
+5. Wait time estimation runs on each refresh, calculating expected delays for different GPU counts
 
 **Threading Model**
 - Main thread handles Textual UI and user interactions
@@ -70,6 +71,7 @@ This is a real-time GPU cluster monitoring tool for Slurm-managed HPC environmen
 **Widget Architecture**
 - Tabbed interface with three main pages (Overview/Nodes/Queue)
 - Each widget manages its own loading states and data tables
+- Queue page includes wait time estimation table showing expected delays for 1, 2, 4, 8, and 16 GPU requests
 - Keyboard shortcuts (1-3) for tab switching, r for refresh, q to quit
 
 ### Database Schema
@@ -98,3 +100,12 @@ When `--db` is enabled, creates four SQLite tables:
 - Code style: Black formatter with 100 character line length
 - Linting: Ruff with Python 3.8+ target
 - Entry point: `slurm-monitor` command via `slurm_monitor.main:main`
+
+### Wait Time Estimation Algorithm
+
+The system calculates estimated wait times by:
+1. Analyzing current GPU availability by type (excluding DRAIN/DOWN nodes)
+2. Processing queued jobs in priority order (higher numeric priority first)
+3. Simulating queue progression for different GPU request sizes (1, 2, 4, 8, 16)
+4. Estimating wait times based on job runtime and queue position
+5. Displaying results in human-readable format (minutes, hours, days, weeks)
