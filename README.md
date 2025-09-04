@@ -35,6 +35,7 @@ uv pip install git+https://github.com/AgrawalAmey/slurm-monitor.git
 git clone git@github.com:AgrawalAmey/slurm-monitor.git
 cd slurm-monitor
 pip install -e .
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 ```
 
 ## Usage
